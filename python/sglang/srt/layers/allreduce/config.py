@@ -157,11 +157,7 @@ def get_allreduce_configs(hidden_size: int) -> Optional[Dict[int, AllReduceBacke
     """
     config_file_name = get_config_file_name(hidden_size)
     
-    # Look for config file in the configs directory
-    config_dir = os.environ.get(
-        "SGLANG_ALLREDUCE_CONFIG_DIR",
-        os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs"),
-    )
+    config_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs")
     
     config_file_path = os.path.join(config_dir, config_file_name)
     
@@ -249,6 +245,7 @@ def save_allreduce_configs(
         hidden_size: Hidden dimension
         output_dir: Output directory (optional)
     """
+    # Always use the fixed path: python/sglang/srt/layers/allreduce/configs
     if output_dir is None:
         output_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), "configs"

@@ -123,7 +123,7 @@ def setup_communicators(
     # Setup Custom AllReduce
     try:
         _CUSTOM_ALLREDUCE = CustomAllreduce(
-            group=get_tp_group().device_group,
+            group=get_tp_group().cpu_group,
             device=device,
         )
         if not _CUSTOM_ALLREDUCE.disabled:
@@ -375,6 +375,7 @@ def get_default_batch_sizes() -> List[int]:
 def main(args):
     # Initialize distributed environment
     from sglang.srt.distributed.parallel_state import init_distributed_environment
+    from sglang.srt.server_args import ServerArgs, set_global_server_args_for_scheduler
     
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
@@ -382,6 +383,13 @@ def main(args):
     
     if world_size < 2:
         raise ValueError("AllReduce tuning requires at least 2 GPUs")
+    
+    mock_server_args = ServerArgs(
+        model_path=args.model if args.model else "mock_model",
+        tp_size=world_size,
+        enable_symm_mem=True,  # Enable symmetric memory for tuning
+    )
+    set_global_server_args_for_scheduler(mock_server_args)
     
     # Initialize distributed environment (this will create _WORLD group)
     init_distributed_environment(
