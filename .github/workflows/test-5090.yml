@@ -34,7 +34,7 @@ on:
     - cron: '0 2 * * *'
 
 concurrency:
-  group: 5090-test-${{ github.ref }}
+  group: 5090-test-${{ github.ref }}-${{ inputs.suite || 'stage-b-test-small-1-gpu' }}
   cancel-in-progress: true
 
 jobs:
