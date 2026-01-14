@@ -19,6 +19,10 @@ on:
           - 'stage-a-test-1'
           - 'quantization_test'
           - 'nightly-1-gpu'
+          - 'accuracy-test-1-gpu'
+          - 'performance-test-1-gpu-part-1'
+          - 'performance-test-1-gpu-part-2'
+          - 'performance-test-1-gpu-part-3'
       partition_count:
         description: 'Number of partitions (parallel jobs)'
         required: true
@@ -46,7 +50,9 @@ jobs:
       fail-fast: false
       max-parallel: 12
       matrix:
+        # Non-suite tests (accuracy/performance) run as single job, others use partition_count
         partition: ${{ fromJson(
+          (contains(fromJson('["accuracy-test-1-gpu","performance-test-1-gpu-part-1","performance-test-1-gpu-part-2","performance-test-1-gpu-part-3"]'), inputs.suite) && '[0]') ||
           (inputs.partition_count == '1' && '[0]') ||
           (inputs.partition_count == '4' && '[0,1,2,3]') ||
           (inputs.partition_count == '12' && '[0,1,2,3,4,5,6,7,8,9,10,11]') ||
@@ -66,6 +72,13 @@ jobs:
         run: |
           bash scripts/ci/ci_install_dependency.sh
 
+      - name: Install human-eval (for accuracy tests)
+        if: inputs.suite == 'accuracy-test-1-gpu'
+        run: |
+          git clone https://github.com/merrymercy/human-eval.git
+          cd human-eval
+          pip install -e .
+
       - name: Run tests
         timeout-minutes: 60
         run: |
@@ -76,13 +89,36 @@ jobs:
           echo "Running suite: $SUITE"
           echo "Partition: ${{ matrix.partition }} of $PARTITION_SIZE"
 
+          # Handle accuracy and performance tests (run unittest directly, not via run_suite.py)
+          if [[ "$SUITE" == "accuracy-test-1-gpu" ]]; then
+            cd test/srt
+            python3 -m sglang.test.ci.run_with_retry test_eval_accuracy_large.py
+
+          elif [[ "$SUITE" == "performance-test-1-gpu-part-1" ]]; then
+            cd test/srt
+            python3 -m unittest test_bench_one_batch.TestBenchOneBatch.test_bs1_small
+            python3 -m unittest test_bench_one_batch.TestBenchOneBatch.test_bs1_default
+
+          elif [[ "$SUITE" == "performance-test-1-gpu-part-2" ]]; then
+            cd test/srt
+            python3 -m unittest test_bench_serving.TestBenchServing.test_online_latency_default
+            python3 -m unittest test_bench_serving.TestBenchServing.test_offline_throughput_default
+            python3 -m unittest test_bench_serving.TestBenchServing.test_offline_throughput_non_stream_small_batch_size
+
+          elif [[ "$SUITE" == "performance-test-1-gpu-part-3" ]]; then
+            cd test/srt
+            python3 -m unittest test_bench_serving.TestBenchServing.test_vlm_offline_throughput
+            python3 -m unittest test_bench_serving.TestBenchServing.test_vlm_online_latency
+
           # quantization_test runs from test/srt without --hw flag
-          if [[ "$SUITE" == "quantization_test" ]]; then
+          elif [[ "$SUITE" == "quantization_test" ]]; then
             cd test/srt
             python3 run_suite.py --suite "$SUITE" \
               --auto-partition-id ${{ matrix.partition }} \
               --auto-partition-size "$PARTITION_SIZE" \
               --continue-on-error
+
+          # Default: suite-based tests via run_suite.py
           else
             cd test/
             python3 run_suite.py --hw cuda --suite "$SUITE" \
