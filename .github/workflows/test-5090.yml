@@ -8,59 +8,69 @@ on:
       - '.github/workflows/test-5090.yml'
   workflow_dispatch:
     inputs:
-      suite:
-        description: 'Test suite to run'
-        required: true
-        default: 'stage-b-test-small-1-gpu'
-        type: choice
-        options:
-          - 'stage-b-test-small-1-gpu'
-          - 'stage-b-test-large-1-gpu'
-          - 'stage-a-test-1'
-          - 'quantization_test'
-          - 'nightly-1-gpu'
-          - 'accuracy-test-1-gpu'
-          - 'performance-test-1-gpu-part-1'
-          - 'performance-test-1-gpu-part-2'
-          - 'performance-test-1-gpu-part-3'
-      partition_count:
-        description: 'Number of partitions (parallel jobs)'
-        required: true
-        default: '8'
-        type: choice
-        options:
-          - '1'
-          - '4'
-          - '8'
-          - '12'
+      run_accuracy:
+        description: 'Run accuracy-test-1-gpu'
+        type: boolean
+        default: true
+      run_perf_part1:
+        description: 'Run performance-test-1-gpu-part-1'
+        type: boolean
+        default: true
+      run_perf_part2:
+        description: 'Run performance-test-1-gpu-part-2'
+        type: boolean
+        default: true
+      run_perf_part3:
+        description: 'Run performance-test-1-gpu-part-3'
+        type: boolean
+        default: true
   schedule:
     # Run daily at 2 AM UTC to track 5090 compatibility
     - cron: '0 2 * * *'
 
 concurrency:
-  group: 5090-test-${{ github.ref }}-${{ inputs.suite || 'stage-b-test-small-1-gpu' }}
+  group: 5090-test-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RUNNER_LABELS: 1-gpu-5090
+  SGLANG_IS_IN_CI: "true"
+  LD_LIBRARY_PATH: "/usr/local/cuda-12.4/targets/x86_64-linux/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/nvshmem/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime/lib"
+
 jobs:
-  test-5090:
-    if: github.repository == 'sgl-project/sglang'
+  accuracy-test-1-gpu:
+    if: |
+      github.repository == 'sgl-project/sglang' &&
+      (github.event_name != 'workflow_dispatch' || inputs.run_accuracy)
     runs-on: 1-gpu-5090
     continue-on-error: true
-    strategy:
-      fail-fast: false
-      max-parallel: 12
-      matrix:
-        # Non-suite tests (accuracy/performance) run as single job, others use partition_count
-        partition: ${{ fromJson(
-          (contains(fromJson('["accuracy-test-1-gpu","performance-test-1-gpu-part-1","performance-test-1-gpu-part-2","performance-test-1-gpu-part-3"]'), inputs.suite) && '[0]') ||
-          (inputs.partition_count == '1' && '[0]') ||
-          (inputs.partition_count == '4' && '[0,1,2,3]') ||
-          (inputs.partition_count == '12' && '[0,1,2,3,4,5,6,7,8,9,10,11]') ||
-          '[0,1,2,3,4,5,6,7]') }}
-    env:
-      RUNNER_LABELS: 1-gpu-5090
-      SGLANG_IS_IN_CI: "true"
-      LD_LIBRARY_PATH: "/usr/local/cuda-12.4/targets/x86_64-linux/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/nvshmem/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime/lib"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        env:
+          IS_BLACKWELL: "1"
+        run: |
+          bash scripts/ci/ci_install_dependency.sh
+          git clone https://github.com/merrymercy/human-eval.git
+          cd human-eval
+          pip install -e .
+
+      - name: Evaluate accuracy
+        timeout-minutes: 25
+        run: |
+          source /etc/profile.d/sglang-ci.sh
+          cd test/srt
+          python3 -m sglang.test.ci.run_with_retry test_eval_accuracy_large.py
+
+  performance-test-1-gpu-part-1:
+    if: |
+      github.repository == 'sgl-project/sglang' &&
+      (github.event_name != 'workflow_dispatch' || inputs.run_perf_part1)
+    runs-on: 1-gpu-5090
+    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -72,73 +82,67 @@ jobs:
         run: |
           bash scripts/ci/ci_install_dependency.sh
 
-      - name: Install human-eval (for accuracy tests)
-        if: inputs.suite == 'accuracy-test-1-gpu'
+      - name: Benchmark single latency
+        timeout-minutes: 10
         run: |
-          git clone https://github.com/merrymercy/human-eval.git
-          cd human-eval
-          pip install -e .
-
-      - name: Run tests
-        timeout-minutes: 60
-        run: |
-          # Source CI environment config (HF_TOKEN, LD_LIBRARY_PATH)
           source /etc/profile.d/sglang-ci.sh
-          SUITE="${{ inputs.suite || 'stage-b-test-small-1-gpu' }}"
-          PARTITION_SIZE="${{ inputs.partition_count || '8' }}"
-          echo "Running suite: $SUITE"
-          echo "Partition: ${{ matrix.partition }} of $PARTITION_SIZE"
+          cd test/srt
+          python3 -m unittest test_bench_one_batch.TestBenchOneBatch.test_bs1_small
+          python3 -m unittest test_bench_one_batch.TestBenchOneBatch.test_bs1_default
 
-          # Handle accuracy and performance tests (run unittest directly, not via run_suite.py)
-          if [[ "$SUITE" == "accuracy-test-1-gpu" ]]; then
-            cd test/srt
-            python3 -m sglang.test.ci.run_with_retry test_eval_accuracy_large.py
+  performance-test-1-gpu-part-2:
+    if: |
+      github.repository == 'sgl-project/sglang' &&
+      (github.event_name != 'workflow_dispatch' || inputs.run_perf_part2)
+    runs-on: 1-gpu-5090
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          elif [[ "$SUITE" == "performance-test-1-gpu-part-1" ]]; then
-            cd test/srt
-            python3 -m unittest test_bench_one_batch.TestBenchOneBatch.test_bs1_small
-            python3 -m unittest test_bench_one_batch.TestBenchOneBatch.test_bs1_default
+      - name: Install dependencies
+        timeout-minutes: 15
+        env:
+          IS_BLACKWELL: "1"
+        run: |
+          bash scripts/ci/ci_install_dependency.sh
 
-          elif [[ "$SUITE" == "performance-test-1-gpu-part-2" ]]; then
-            cd test/srt
-            python3 -m unittest test_bench_serving.TestBenchServing.test_online_latency_default
-            python3 -m unittest test_bench_serving.TestBenchServing.test_offline_throughput_default
-            python3 -m unittest test_bench_serving.TestBenchServing.test_offline_throughput_non_stream_small_batch_size
+      - name: Benchmark serving latency and throughput
+        timeout-minutes: 20
+        run: |
+          source /etc/profile.d/sglang-ci.sh
+          cd test/srt
+          python3 -m unittest test_bench_serving.TestBenchServing.test_online_latency_default
+          python3 -m unittest test_bench_serving.TestBenchServing.test_offline_throughput_default
+          python3 -m unittest test_bench_serving.TestBenchServing.test_offline_throughput_non_stream_small_batch_size
 
-          elif [[ "$SUITE" == "performance-test-1-gpu-part-3" ]]; then
-            cd test/srt
-            python3 -m unittest test_bench_serving.TestBenchServing.test_vlm_offline_throughput
-            python3 -m unittest test_bench_serving.TestBenchServing.test_vlm_online_latency
+  performance-test-1-gpu-part-3:
+    if: |
+      github.repository == 'sgl-project/sglang' &&
+      (github.event_name != 'workflow_dispatch' || inputs.run_perf_part3)
+    runs-on: 1-gpu-5090
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          # quantization_test runs from test/srt without --hw flag
-          elif [[ "$SUITE" == "quantization_test" ]]; then
-            cd test/srt
-            python3 run_suite.py --suite "$SUITE" \
-              --auto-partition-id ${{ matrix.partition }} \
-              --auto-partition-size "$PARTITION_SIZE" \
-              --continue-on-error
+      - name: Install dependencies
+        timeout-minutes: 15
+        env:
+          IS_BLACKWELL: "1"
+        run: |
+          bash scripts/ci/ci_install_dependency.sh
 
-          # Default: suite-based tests via run_suite.py
-          else
-            cd test/
-            python3 run_suite.py --hw cuda --suite "$SUITE" \
-              --auto-partition-id ${{ matrix.partition }} \
-              --auto-partition-size "$PARTITION_SIZE" \
-              --continue-on-error
-          fi
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-partition-${{ matrix.partition }}
-          path: |
-            test/*.log
-            test/*.xml
-          retention-days: 7
+      - name: Benchmark VLM
+        timeout-minutes: 20
+        run: |
+          source /etc/profile.d/sglang-ci.sh
+          cd test/srt
+          python3 -m unittest test_bench_serving.TestBenchServing.test_vlm_offline_throughput
+          python3 -m unittest test_bench_serving.TestBenchServing.test_vlm_online_latency
 
   summary:
-    needs: test-5090
+    needs: [accuracy-test-1-gpu, performance-test-1-gpu-part-1, performance-test-1-gpu-part-2, performance-test-1-gpu-part-3]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -146,7 +150,9 @@ jobs:
         run: |
           echo "## 5090 GPU Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Test Suite**: ${{ inputs.suite || 'stage-b-test-small-1-gpu' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Partitions**: ${{ inputs.partition_count || '8' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check individual partition jobs for detailed results." >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| accuracy-test-1-gpu | ${{ needs.accuracy-test-1-gpu.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| performance-test-1-gpu-part-1 | ${{ needs.performance-test-1-gpu-part-1.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| performance-test-1-gpu-part-2 | ${{ needs.performance-test-1-gpu-part-2.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| performance-test-1-gpu-part-3 | ${{ needs.performance-test-1-gpu-part-3.result }} |" >> $GITHUB_STEP_SUMMARY
