@@ -16,6 +16,9 @@ on:
         options:
           - 'stage-b-test-small-1-gpu'
           - 'stage-b-test-large-1-gpu'
+          - 'stage-a-test-1'
+          - 'quantization_test'
+          - 'nightly-1-gpu'
       partition_count:
         description: 'Number of partitions (parallel jobs)'
         required: true
@@ -68,15 +71,25 @@ jobs:
         run: |
           # Source CI environment config (HF_TOKEN, LD_LIBRARY_PATH)
           source /etc/profile.d/sglang-ci.sh
-          cd test/
           SUITE="${{ inputs.suite || 'stage-b-test-small-1-gpu' }}"
           PARTITION_SIZE="${{ inputs.partition_count || '8' }}"
           echo "Running suite: $SUITE"
           echo "Partition: ${{ matrix.partition }} of $PARTITION_SIZE"
-          python3 run_suite.py --hw cuda --suite "$SUITE" \
-            --auto-partition-id ${{ matrix.partition }} \
-            --auto-partition-size "$PARTITION_SIZE" \
-            --continue-on-error
+
+          # quantization_test runs from test/srt without --hw flag
+          if [[ "$SUITE" == "quantization_test" ]]; then
+            cd test/srt
+            python3 run_suite.py --suite "$SUITE" \
+              --auto-partition-id ${{ matrix.partition }} \
+              --auto-partition-size "$PARTITION_SIZE" \
+              --continue-on-error
+          else
+            cd test/
+            python3 run_suite.py --hw cuda --suite "$SUITE" \
+              --auto-partition-id ${{ matrix.partition }} \
+              --auto-partition-size "$PARTITION_SIZE" \
+              --continue-on-error
+          fi
 
       - name: Upload test results
         if: always()
