@@ -238,7 +238,10 @@ find "${FLASHINFER_CACHE_DIR}" -name "flashinfer_jit_cache-*.whl" ! -name "flash
 FLASHINFER_WHEEL_PATTERN="flashinfer_jit_cache-${FLASHINFER_VERSION}*.whl"
 CACHED_WHEEL=$(find "${FLASHINFER_CACHE_DIR}" -name "${FLASHINFER_WHEEL_PATTERN}" -type f 2>/dev/null | head -n 1)
 
-FLASHINFER_INSTALLED=false
+# Only set FLASHINFER_INSTALLED to false if not already set by Blackwell check above
+if [ "$FLASHINFER_INSTALLED" != "true" ]; then
+    FLASHINFER_INSTALLED=false
+fi
 
 # Try to install from cache first
 if [ -n "$CACHED_WHEEL" ] && [ -f "$CACHED_WHEEL" ]; then
